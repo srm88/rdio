@@ -32,19 +32,32 @@ type Token struct {
   Key, Secret string
 }
 
+func (t Token) Serialize() (rawToken string) {
+  return strings.Join([]string{t.Key, t.Secret}, "|")
+}
+
+func DeserializeToken(rawToken string) (t Token, err error) {
+  parts := strings.Split(rawToken, "|")
+  if len(parts) != 2 {
+    err = errors.New("Could not deserialize token from string " + rawToken)
+    return
+  }
+  t = Token{parts[0], parts[1]}
+  return
+}
+
 // GetAuth returns the Authorization header for a request to an oauth service.
 // The first step in any oauth authorization is to request a token for the user,
 // which will require an authorized request. For this stage, token is expected
 // to be nil.
 // Subsequent requests will use the token's key to generate the signature.
-func (c *Consumer) GetAuth(endpoint string, callbackUrl string, parameters url.Values, token *Token, realm string) (string, error) {
-  return c.GetAuthWithTimestampAndNonce(endpoint, callbackUrl, parameters, token, realm, GenTimestamp(), GenNonce())
+func (c *Consumer) GetAuth(endpoint string, parameters url.Values, token *Token, realm string) (string, error) {
+  return c.GetAuthWithTimestampAndNonce(endpoint, parameters, token, realm, GenTimestamp(), GenNonce())
 }
 
 // GetAuthWithTimestampAndNonce is the sister function of GetAuth. Use this if
 // you wish to control the oauth nonce and timestamp of your request.
-func (c *Consumer) GetAuthWithTimestampAndNonce(endpoint string, callbackUrl string, parameters url.Values, token *Token, realm, timestamp, nonce string) (string, error) {
-  parameters.Set("oauth_callback", callbackUrl)
+func (c *Consumer) GetAuthWithTimestampAndNonce(endpoint string, parameters url.Values, token *Token, realm, timestamp, nonce string) (string, error) {
   paramsForSigning := getPairs(parameters)
   oauthPairs := pairList{
     pair{"oauth_version", Version},
@@ -86,9 +99,9 @@ func (c *Consumer) GetAuthWithTimestampAndNonce(endpoint string, callbackUrl str
 
   normalizedParams := strings.Join(paramsForSigning.queryEscape(nil), "&")
   signatureBase := strings.Join([]string{
-    url.QueryEscape("POST"),
-    url.QueryEscape(normalizedUrl),
-    url.QueryEscape(normalizedParams)}, "&")
+    escape("POST"),
+    escape(normalizedUrl),
+    escape(normalizedParams)}, "&")
 
   hash := hmac.New(sha1.New, []byte(hmacKey))
   hash.Write([]byte(signatureBase))
@@ -105,20 +118,18 @@ func (c *Consumer) GetAuthWithTimestampAndNonce(endpoint string, callbackUrl str
   return "OAuth " + res, nil
 }
 
-func (c *Consumer) SignedPostRequestWithTimestampAndNonce(url string, callbackUrl string, parameters url.Values, token *Token, timestamp string, nonce string) (response string, err error) {
+func (c *Consumer) SignedPostRequestWithTimestampAndNonce(url string, parameters url.Values, token *Token, timestamp string, nonce string) (response string, err error) {
   var (
     auth string
     request *http.Request
     resp *http.Response
     respBytes []byte
   )
-  // Copy the additional parameters to the request.
-  parameters.Set("oauth_callback", callbackUrl)
   if request, err = http.NewRequest("POST", url, strings.NewReader(parameters.Encode())); err != nil {
     return
   }
   // Get our authorization header.
-  if auth, err = c.GetAuthWithTimestampAndNonce(url, callbackUrl, parameters, token, "", timestamp, nonce); err != nil {
+  if auth, err = c.GetAuthWithTimestampAndNonce(url, parameters, token, "", timestamp, nonce); err != nil {
     return
   }
   request.Header.Set("Authorization", auth)
@@ -135,20 +146,18 @@ func (c *Consumer) SignedPostRequestWithTimestampAndNonce(url string, callbackUr
 }
 
 
-func (c *Consumer) SignedPostRequest(url string, callbackUrl string, parameters url.Values, token *Token) (response string, err error) {
+func (c *Consumer) SignedPostRequest(url string, parameters url.Values, token *Token) (response string, err error) {
   var (
     auth string
     request *http.Request
     resp *http.Response
     respBytes []byte
   )
-  // Copy the additional parameters to the request.
-  parameters.Set("oauth_callback", callbackUrl)
   if request, err = http.NewRequest("POST", url, strings.NewReader(parameters.Encode())); err != nil {
     return
   }
   // Get our authorization header.
-  if auth, err = c.GetAuth(url, callbackUrl, parameters, token, ""); err != nil {
+  if auth, err = c.GetAuth(url, parameters, token, ""); err != nil {
     return
   }
   request.Header.Set("Authorization", auth)
@@ -189,6 +198,11 @@ func GenNonce () string {
   return string(buf)
 }
 
+func escape(s string) string {
+  s = url.QueryEscape(s)
+  return strings.Replace(s, "+", "%20", -1)
+}
+
 // Helpers for sorting url.Values
 type pair struct {
   Key, Value string
@@ -217,11 +231,11 @@ func getPairs(v url.Values) pairList {
 func (pairs pairList) queryEscape(valueTransform func(string) string) []string {
   parts := make([]string, 0, len(pairs))
   for _, p := range pairs {
-    part := url.QueryEscape(p.Key) + "="
+    part := escape(p.Key) + "="
     if valueTransform != nil {
-      part += valueTransform(url.QueryEscape(p.Value))
+      part += valueTransform(escape(p.Value))
     } else {
-      part += url.QueryEscape(p.Value)
+      part += escape(p.Value)
     }
     parts = append(parts, part)
   }
